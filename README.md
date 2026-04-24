@@ -6,18 +6,22 @@ A React dashboard for managing and researching the Parrot Device — assign song
 
 ## Requirements
 
-- Node.js v20 or higher  
+- Node.js v20 or higher
 - npm (comes with Node.js)
+- cppcheck, for Arduino static analysis
+
+---
+
+## Clone the Repository
+git clone https://github.com/ludev-nl/2026-26-Puppets_for_Parrots.git
+git checkout web-app-demo
 
 # Quick Start
 
 # Windows
 
-# Clone the repository and navigate to the project folder:
-git clone https://github.com/ludev-nl/2026-26-Puppets_for_Parrots.git
-cd parrot_device_v2 
-npm install # install all required packages
-npm run dev # start the development server
+npm install 
+npm run dev
 
 # Open the app in your browser on http://localhost:8080
 
@@ -27,3 +31,7 @@ npm run dev # start the development server
 bash start.sh 
 
 # Then open http://localhost:8080
+
+
+# run unit tests:
+npm test
