@@ -1,0 +1,288 @@
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.resolve(__dirname, '..');
+const MOCK = path.join(ROOT, 'mock_device');
+const CONFIG_PATH = path.join(MOCK, 'config', 'button_map.json');
+const SOUND_INDEX_PATH = path.join(MOCK, 'metadata', 'sound_index');
+const LOG_PATH = path.join(MOCK, 'log', 'database.csv');
+const SOUNDS_DIR = path.join(MOCK, 'sounds');
+
+function ensureFiles() {
+  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+  fs.mkdirSync(path.dirname(SOUND_INDEX_PATH), { recursive: true });
+  fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
+  fs.mkdirSync(SOUNDS_DIR, { recursive: true });
+
+  if (!fs.existsSync(CONFIG_PATH)) {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify({ 1: '', 2: '', 3: '', 4: '' }, null, 2));
+  }
+
+  if (!fs.existsSync(SOUND_INDEX_PATH)) {
+    fs.writeFileSync(SOUND_INDEX_PATH, JSON.stringify({ sounds: [] }, null, 2));
+  }
+
+  if (!fs.existsSync(LOG_PATH)) {
+    fs.writeFileSync(LOG_PATH, 'timestamp,button,soundfile\n');
+  }
+}
+
+function send(res, status, data, type = 'application/json') {
+  res.writeHead(status, {
+    'Content-Type': type,
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  });
+
+  if (type === 'application/json') {
+    res.end(JSON.stringify(data));
+  } else {
+    res.end(data);
+  }
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > 30 * 1024 * 1024) {
+        reject(new Error('Body too large'));
+      }
+    });
+
+    req.on('end', () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (e) {
+        reject(e);
+      }
+    });
+  });
+}
+
+function readConfig() {
+  return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+}
+
+function writeConfig(config) {
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+function readSoundIndex() {
+  try {
+    return JSON.parse(fs.readFileSync(SOUND_INDEX_PATH, 'utf8'));
+  } catch {
+    return { sounds: [] };
+  }
+}
+
+function writeSoundIndex(index) {
+  fs.writeFileSync(SOUND_INDEX_PATH, JSON.stringify(index, null, 2));
+}
+
+function listSounds() {
+  const index = readSoundIndex();
+  const files = fs.readdirSync(SOUNDS_DIR).filter(f => /\.(wav|mp3)$/i.test(f));
+  const fromIndex = new Map((index.sounds || []).map(s => [s.name, s]));
+
+  return files.map(name => {
+    return (
+      fromIndex.get(name) || {
+        name,
+        label: name.replace(/\.[^.]+$/, ''),
+        duration_ms: 0,
+      }
+    );
+  });
+}
+
+function readLogs() {
+  if (!fs.existsSync(LOG_PATH)) return [];
+
+  const content = fs.readFileSync(LOG_PATH, 'utf8').trim();
+  if (!content) return [];
+
+  const lines = content.split(/\r?\n/).slice(1);
+
+  return lines.filter(Boolean).map((line) => {
+    const [timestamp, button, soundfile] = line.split(',').map(v => v.trim());
+    return {
+      timestamp: Number(timestamp),
+      button: Number(button),
+      soundfile,
+    };
+  });
+}
+
+function appendLog({ button, soundfile, timestamp }) {
+  const safeButton = Number(button);
+  const safeSound = String(soundfile || '').replace(/[\r\n,]/g, '_');
+  const ts = timestamp ? Number(timestamp) : Math.floor(Date.now() / 1000);
+
+  fs.appendFileSync(LOG_PATH, `${ts},${safeButton},${safeSound}\n`);
+}
+
+ensureFiles();
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === 'OPTIONS') {
+      return send(res, 204, {});
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host}`);
+
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      return send(res, 200, { ok: true, name: 'parrot-device-api' });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/config') {
+      return send(res, 200, {
+        buttons: readConfig(),
+        sounds: listSounds(),
+      });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/config') {
+      const body = await readJsonBody(req);
+      const next = body.buttons || body;
+      const clean = {};
+
+      [1, 2, 3, 4].forEach(id => {
+        clean[id] = String(next[id] || '');
+      });
+
+      writeConfig(clean);
+
+      return send(res, 200, {
+        ok: true,
+        buttons: clean,
+      });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/device-config') {
+      const config = readConfig();
+      const sounds = listSounds().map(s => s.name);
+      const tracks = {};
+
+      [1, 2, 3, 4].forEach(id => {
+        const sound = config[id] || '';
+        tracks[id] = Math.max(1, sounds.indexOf(sound) + 1);
+      });
+
+      return send(res, 200, {
+        buttons: config,
+        tracks,
+      });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/sounds') {
+      return send(res, 200, { sounds: listSounds() });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/sounds') {
+      const body = await readJsonBody(req);
+
+      const fileName = path
+        .basename(String(body.name || 'sound.wav'))
+        .replace(/[^a-zA-Z0-9._-]/g, '_');
+
+      const base64 = String(body.data || '').replace(
+        /^data:audio\/[a-zA-Z0-9.+-]+;base64,/,
+        ''
+      );
+
+      if (!fileName || !base64) {
+        return send(res, 400, { error: 'Missing name or data' });
+      }
+
+      fs.writeFileSync(
+        path.join(SOUNDS_DIR, fileName),
+        Buffer.from(base64, 'base64')
+      );
+
+      const index = readSoundIndex();
+      const existing = (index.sounds || []).filter(s => s.name !== fileName);
+      const cleanLabel = String(body.label || '').trim();
+
+      const newSound = {
+        name: fileName,
+        label: cleanLabel || fileName.replace(/\.[^.]+$/, ''),
+        duration_ms: 0,
+      };
+
+      writeSoundIndex({
+        sounds: [...existing, newSound],
+      });
+
+      return send(res, 200, {
+        ok: true,
+        sound: fileName,
+        metadata: newSound,
+      });
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/api/sounds/')) {
+      const fileName = path.basename(
+        decodeURIComponent(url.pathname.replace('/api/sounds/', ''))
+      );
+
+      const filePath = path.join(SOUNDS_DIR, fileName);
+
+      if (!fs.existsSync(filePath)) {
+        return send(res, 404, { error: 'Sound not found' });
+      }
+
+      const ext = path.extname(fileName).toLowerCase();
+      const type = ext === '.mp3' ? 'audio/mpeg' : 'audio/wav';
+
+      res.writeHead(200, {
+        'Content-Type': type,
+        'Access-Control-Allow-Origin': '*',
+      });
+
+      return fs.createReadStream(filePath).pipe(res);
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/logs') {
+      return send(res, 200, { logs: readLogs() });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/log') {
+      const body = await readJsonBody(req);
+      const config = readConfig();
+      const button = Number(body.button);
+      const soundfile = body.soundfile || config[button] || '';
+
+      if (![1, 2, 3, 4].includes(button)) {
+        return send(res, 400, { error: 'button must be 1, 2, 3, or 4' });
+      }
+
+      appendLog({
+        button,
+        soundfile,
+        timestamp: body.timestamp,
+      });
+
+      return send(res, 200, {
+        ok: true,
+        button,
+        soundfile,
+      });
+    }
+
+    return send(res, 404, { error: 'Not found' });
+  } catch (error) {
+    return send(res, 500, { error: error.message });
+  }
+});
+
+const PORT = process.env.PORT || 3001;
+
+server.listen(PORT, () => {
+  console.log(`Parrot device API running on http://localhost:${PORT}`);
+});

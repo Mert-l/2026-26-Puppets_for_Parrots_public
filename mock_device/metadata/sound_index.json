@@ -14,6 +14,16 @@
       "name": "sound3.wav",
       "label": "evil laugh",
       "duration_ms": 100
+    },
+    {
+      "name": "freesound_community-boop-741-mhz-39314.mp3",
+      "label": "bong sound",
+      "duration_ms": 0
+    },
+    {
+      "name": "freesound_community-comedic-silence-90574.mp3",
+      "label": "akward silence for birds",
+      "duration_ms": 0
     }
   ]
 }
