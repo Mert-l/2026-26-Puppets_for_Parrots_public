@@ -1,0 +1,19 @@
+{
+  "sounds": [
+    {
+      "name": "sound1.wav",
+      "label": "ringtone noise, several melodic plings",
+      "duration_ms": 300
+    },
+    {
+      "name": "sound2.wav",
+      "label": "peacefull nature",
+      "duration_ms": 1200
+    },
+    {
+      "name": "sound3.wav",
+      "label": "evil laugh",
+      "duration_ms": 100
+    }
+  ]
+}
