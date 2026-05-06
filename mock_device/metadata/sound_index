@@ -24,6 +24,11 @@
       "name": "freesound_community-comedic-silence-90574.mp3",
       "label": "akward silence for birds",
       "duration_ms": 0
+    },
+    {
+      "name": "drmapan.wav",
+      "label": "a drum pan, slowly quieting in volume",
+      "duration_ms": 0
     }
   ]
 }
