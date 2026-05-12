@@ -7,23 +7,51 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { Camera } from "lucide-react";
 
+// supbase
+import { useEffect} from "react";
+import { supabase } from "@/lib/supabase";
+
+
 export default function Profile() {
   const { toast } = useToast();
   const [profile, setProfile] = useState({
-    ownerName: "Dr. Sarah Mitchell",
-    email: "sarah@avianresearch.org",
-    
-    parrotName: "Kiwi",
-    species: "African Grey",
-    age: "4",
-    gender: "Female",
-    environment: "research",
+    ownerName: "",
+    email: "",
+
+    parrotName: "",
+    species: "",
+    age: "",
+    gender: "",
+    environment: "",
   });
 
   const update = (key: string, value: string) => setProfile((p) => ({ ...p, [key]: value }));
 
-  const handleSave = () => {
-    toast({ title: "Profile saved", description: "Your information has been updated." });
+
+  const handleSave = async () => {
+    const { error } = await supabase.from("profiles").insert({
+      owner_name: profile.ownerName,
+      email: profile.email,
+      parrot_name: profile.parrotName,
+      species: profile.species,
+      age: Number(profile.age),
+      gender: profile.gender,
+      environment: profile.environment,
+    });
+
+    if (error) {
+      toast({
+        title: "Save failed",
+        description: error.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Profile saved",
+      description: "Your information has been saved to Supabase.",
+    });
   };
 
   return (

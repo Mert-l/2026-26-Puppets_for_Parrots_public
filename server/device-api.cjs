@@ -284,5 +284,5 @@ const server = http.createServer(async (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 server.listen(PORT, () => {
-  console.log(`Parrot device API running on http://localhost:${PORT}`);
+  console.log(`Parrot device API running on port ${PORT}`);
 });
