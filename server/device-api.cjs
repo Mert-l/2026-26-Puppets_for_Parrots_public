@@ -24,7 +24,10 @@ function ensureFiles() {
   }
 
   if (!fs.existsSync(LOG_PATH)) {
-    fs.writeFileSync(LOG_PATH, 'timestamp,button,soundfile\n');
+    fs.writeFileSync(
+      LOG_PATH,
+      'timestamp,button,soundfile,ms_since_last_sound\n'
+    );
   }
 }
 
@@ -44,17 +47,21 @@ function send(res, status, data, type = 'application/json') {
 }
 
 function readJsonBody(req) {
+  const t0 = Date.now();
+  console.log("  └─ reading body start", t0);
+
   return new Promise((resolve, reject) => {
     let body = '';
 
     req.on('data', chunk => {
       body += chunk;
-      if (body.length > 30 * 1024 * 1024) {
-        reject(new Error('Body too large'));
-      }
+      console.log("  └─ chunk", chunk.length, "bytes");
     });
 
     req.on('end', () => {
+      const t1 = Date.now();
+      console.log("  └─ body END", t1, "duration:", t1 - t0, "ms");
+
       try {
         resolve(body ? JSON.parse(body) : {});
       } catch (e) {
@@ -118,17 +125,37 @@ function readLogs() {
   });
 }
 
-function appendLog({ button, soundfile, timestamp }) {
+function appendLog({
+  button,
+  soundfile,
+  timestamp,
+  ms_since_last_sound,
+}) {
   const safeButton = Number(button);
-  const safeSound = String(soundfile || '').replace(/[\r\n,]/g, '_');
-  const ts = timestamp ? Number(timestamp) : Math.floor(Date.now() / 1000);
 
-  fs.appendFileSync(LOG_PATH, `${ts},${safeButton},${safeSound}\n`);
+  const safeSound = String(soundfile || '')
+    .replace(/[\r\n,]/g, '_');
+
+  const safeTimestamp = String(timestamp || '')
+    .replace(/[\r\n,]/g, '_');
+
+  const delta = Number(ms_since_last_sound || 0);
+
+  fs.appendFileSync(
+    LOG_PATH,
+    `${safeTimestamp},${safeButton},${safeSound},${delta}\n`
+  );
+  
 }
 
 ensureFiles();
 
 const server = http.createServer(async (req, res) => {
+  const t0 = Date.now();
+  const id = Math.random().toString(16).slice(2);
+
+  console.log(`\n[${id}] ▶ INCOMING`, req.method, req.url, t0);
+
   try {
     if (req.method === 'OPTIONS') {
       return send(res, 204, {});
@@ -178,6 +205,21 @@ const server = http.createServer(async (req, res) => {
         buttons: config,
         tracks,
       });
+    }
+
+    if (
+      req.method === 'GET' && url.pathname === '/api/config/button_map.json') {
+      const raw = fs.readFileSync(
+        CONFIG_PATH
+      );
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': raw.length,
+        'Access-Control-Allow-Origin': '*',
+      });
+
+      return res.end(raw);
     }
 
     if (req.method === 'GET' && url.pathname === '/api/sounds') {
@@ -253,26 +295,54 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/log') {
-      const body = await readJsonBody(req);
-      const config = readConfig();
-      const button = Number(body.button);
-      const soundfile = body.soundfile || config[button] || '';
+      const t0 = Date.now();
+      console.log("  └─ /api/log handler ENTER", t0);
 
-      if (![1, 2, 3, 4].includes(button)) {
-        return send(res, 400, { error: 'button must be 1, 2, 3, or 4' });
-      }
+      const body = await readJsonBody(req);
+
+      console.log("  └─ JSON parsed", Date.now());
+
+      const config = readConfig();
+
+      const button = Number(body.button);
+
+      const soundfile =
+        String(body.soundfile || config[button] || '');
+
+      const timestamp =
+        String(body.timestamp || new Date().toISOString());
+
+      const msSinceLastSound =
+        Number(body.ms_since_last_sound || 0);
+
+      console.log("  └─ BEFORE appendLog", Date.now());
 
       appendLog({
         button,
         soundfile,
-        timestamp: body.timestamp,
+        timestamp,
+        ms_since_last_sound: msSinceLastSound,
       });
 
-      return send(res, 200, {
+      console.log("  └─ AFTER appendLog (CSV written)", Date.now());
+
+      const responsePayload = {
         ok: true,
         button,
         soundfile,
-      });
+        timestamp,
+        ms_since_last_sound: msSinceLastSound,
+      };
+
+      console.log("  └─ SENDING RESPONSE", Date.now());
+
+      res.setHeader('Connection', 'close');
+
+      res.end(JSON.stringify(responsePayload));
+
+      console.log("  └─ RESPONSE END CALLED", Date.now());
+
+      return;
     }
 
     return send(res, 404, { error: 'Not found' });
@@ -283,6 +353,6 @@ const server = http.createServer(async (req, res) => {
 
 const PORT = process.env.PORT || 3001;
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Parrot device API running on port ${PORT}`);
 });
