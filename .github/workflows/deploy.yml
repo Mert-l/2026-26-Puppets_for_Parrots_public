@@ -1,0 +1,41 @@
+name: Run Parrot Device Project
+
+on:
+  push:
+    branches:
+      - web-app-demo
+  pull_request:
+    branches:
+      - web-app-demo
+
+jobs:
+  run-project:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Start API server
+        run: |
+          nohup npm run dev:api &
+          sleep 10
+
+      - name: Start frontend server
+        run: |
+          nohup npm run dev &
+          sleep 10
+
+      - name: Check API health
+        run: curl http://localhost:3001/api/health
+
+      - name: Check frontend
+        run: curl http://localhost:8080
