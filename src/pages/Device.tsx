@@ -40,15 +40,40 @@ const emptyButtons: ButtonConfig[] = [1, 2, 3, 4].map((id) => ({
 }));
 
 const API_BASE = "";
+const MAX_AUDIO_SECONDS = 120;
+const allowedAudioTypes = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave"];
+const allowedAudioExtensions = [".mp3", ".wav"];
 
 async function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+async function getAudioDuration(file: File): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio();
+    const url = URL.createObjectURL(file);
+
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      resolve(audio.duration);
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not read audio duration"));
+    };
+    audio.src = url;
+  });
+}
+
+function isAllowedAudioFile(file: File) {
+  const lowerName = file.name.toLowerCase();
+  return allowedAudioTypes.includes(file.type) || allowedAudioExtensions.some((ext) => lowerName.endsWith(ext));
 }
 
 export default function Device() {
@@ -59,6 +84,7 @@ export default function Device() {
   const [tempSongName, setTempSongName] = useState("");
   const [tempSoundFile, setTempSoundFile] = useState("");
   const [tempUploadFile, setTempUploadFile] = useState<File | null>(null);
+  const [tempUploadDurationMs, setTempUploadDurationMs] = useState<number | null>(null);
   const [tempAudioUrl, setTempAudioUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [apiOnline, setApiOnline] = useState(false);
@@ -69,21 +95,16 @@ export default function Device() {
 
   const soundLabel = useMemo(() => {
     const map = new Map<string, string>();
-
     sounds.forEach((s) => {
       map.set(s.name, s.label || s.name.replace(/\.[^.]+$/, ""));
     });
-
     return map;
   }, [sounds]);
 
   const refreshConfig = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/config`);
-
-      if (!res.ok) {
-        throw new Error("API server is not responding");
-      }
+      if (!res.ok) throw new Error("API server is not responding");
 
       const data = await res.json();
       const loadedSounds = data.sounds || [];
@@ -100,7 +121,6 @@ export default function Device() {
       setButtons(
         [1, 2, 3, 4].map((id) => {
           const soundFile = config[id] || "";
-
           return {
             id,
             color: buttonColors[id],
@@ -122,7 +142,6 @@ export default function Device() {
 
   useEffect(() => {
     if (!sounds.length) return;
-
     setButtons((prev) =>
       prev.map((b) => ({
         ...b,
@@ -136,6 +155,7 @@ export default function Device() {
     setTempSongName(btn.songName);
     setTempSoundFile(btn.soundFile);
     setTempUploadFile(null);
+    setTempUploadDurationMs(null);
     setTempAudioUrl(btn.audioUrl);
     setIsPlaying(false);
     setSheetOpen(true);
@@ -144,35 +164,56 @@ export default function Device() {
   const handleSoundSelect = (fileName: string) => {
     setTempSoundFile(fileName);
     setTempUploadFile(null);
+    setTempUploadDurationMs(null);
     setTempSongName(soundLabel.get(fileName) || fileName.replace(/\.[^.]+$/, ""));
     setTempAudioUrl(`/api/sounds/${encodeURIComponent(fileName)}`);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-
     if (!file) return;
 
-    setTempUploadFile(file);
-    setTempSoundFile(file.name);
-
-    // Keep the user-written description.
-    // Only auto-fill if the field is empty.
-    setTempSongName((current) =>
-      current.trim() || file.name.replace(/\.[^.]+$/, "")
-    );
-
-    setTempAudioUrl(URL.createObjectURL(file));
-  };
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-
-    if (isPlaying) {
-      audioRef.current.pause();
-    } else {
-      audioRef.current.play();
+    if (!isAllowedAudioFile(file)) {
+      toast({
+        title: "Invalid file",
+        description: "Only MP3 and WAV files are allowed.",
+        variant: "destructive",
+      });
+      e.target.value = "";
+      return;
     }
 
+    try {
+      const durationSeconds = await getAudioDuration(file);
+      if (durationSeconds > MAX_AUDIO_SECONDS) {
+        toast({
+          title: "File too long",
+          description: "Sound files must be maximum 2 minutes.",
+          variant: "destructive",
+        });
+        e.target.value = "";
+        return;
+      }
+
+      setTempUploadFile(file);
+      setTempUploadDurationMs(Math.round(durationSeconds * 1000));
+      setTempSoundFile(file.name);
+      setTempSongName((current) => current.trim() || file.name.replace(/\.[^.]+$/, ""));
+      setTempAudioUrl(URL.createObjectURL(file));
+    } catch (error) {
+      toast({
+        title: "Upload failed",
+        description: error instanceof Error ? error.message : "Could not read this audio file.",
+        variant: "destructive",
+      });
+      e.target.value = "";
+    }
+  };
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) audioRef.current.pause();
+    else audioRef.current.play();
     setIsPlaying(!isPlaying);
   };
 
@@ -187,9 +228,7 @@ export default function Device() {
       body: JSON.stringify(payload),
     });
 
-    if (!res.ok) {
-      throw new Error("Could not save config to API");
-    }
+    if (!res.ok) throw new Error("Could not save config to API");
   };
 
   const handleSave = async () => {
@@ -209,14 +248,13 @@ export default function Device() {
             name: tempUploadFile.name,
             label: finalLabel,
             data,
+            duration_ms: tempUploadDurationMs,
           }),
         });
 
-        if (!uploadRes.ok) {
-          throw new Error("Could not upload sound file");
-        }
-
         const uploaded = await uploadRes.json();
+        if (!uploadRes.ok) throw new Error(uploaded.error || "Could not upload sound file");
+
         finalSoundFile = uploaded.sound;
         finalLabel = uploaded.metadata?.label || finalLabel || finalSoundFile.replace(/\.[^.]+$/, "");
       }
@@ -252,9 +290,9 @@ export default function Device() {
 
   const simulatePress = async (button: ButtonConfig) => {
     try {
-      if (button.audioUrl) {
-        new Audio(button.audioUrl).play();
-      }
+      if (button.audioUrl) new Audio(button.audioUrl).play();
+
+      const ownerEmail = localStorage.getItem("parrot_owner_email") || "";
 
       const res = await fetch(`${API_BASE}/api/log`, {
         method: "POST",
@@ -262,12 +300,11 @@ export default function Device() {
         body: JSON.stringify({
           button: button.id,
           soundfile: button.soundFile,
+          owner_email: ownerEmail,
         }),
       });
 
-      if (!res.ok) {
-        throw new Error("Could not write log entry");
-      }
+      if (!res.ok) throw new Error("Could not write log entry");
 
       toast({
         title: "Button press logged",
@@ -287,16 +324,10 @@ export default function Device() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Device Configuration</h1>
-          <p className="text-muted-foreground mt-1">
-            Assign sounds to each physical button and test logging.
-          </p>
+          <p className="text-muted-foreground mt-1">Assign sounds to each physical button and test logging.</p>
         </div>
 
-        <div
-          className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
-            apiOnline ? "text-green-700" : "text-destructive"
-          }`}
-        >
+        <div className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${apiOnline ? "text-green-700" : "text-destructive"}`}>
           <Wifi className="h-3 w-3" />
           {apiOnline ? "API online" : "API offline"}
         </div>
@@ -310,15 +341,9 @@ export default function Device() {
         <CardContent>
           <div className="flex justify-center">
             <div className="relative bg-muted border-2 border-border rounded-2xl w-72 h-80 flex flex-col items-center justify-center gap-4 p-6 shadow-sm">
-              <div
-                className={`absolute top-4 right-4 w-2 h-2 rounded-full ${
-                  apiOnline ? "bg-green-500 animate-pulse" : "bg-red-500"
-                }`}
-              />
+              <div className={`absolute top-4 right-4 w-2 h-2 rounded-full ${apiOnline ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
 
-              <span className="absolute top-4 left-4 text-[10px] font-medium text-muted-foreground tracking-widest uppercase">
-                Parrot Device
-              </span>
+              <span className="absolute top-4 left-4 text-[10px] font-medium text-muted-foreground tracking-widest uppercase">Parrot Device</span>
 
               <div className="grid grid-cols-2 gap-4 mt-4">
                 {buttons.map((btn) => (
@@ -331,12 +356,8 @@ export default function Device() {
                     style={{ backgroundColor: btn.color }}
                   >
                     <Music className="h-5 w-5 text-white/90" />
-                    <span className="text-[10px] text-white/80 font-medium">
-                      Button {btn.id}
-                    </span>
-                    <span className="text-[9px] text-white/70 px-1 truncate max-w-20">
-                      {btn.songName || "empty"}
-                    </span>
+                    <span className="text-[10px] text-white/80 font-medium">Button {btn.id}</span>
+                    <span className="text-[9px] text-white/70 px-1 truncate max-w-20">{btn.songName || "empty"}</span>
                   </button>
                 ))}
               </div>
@@ -349,21 +370,14 @@ export default function Device() {
             </div>
           </div>
 
-          <p className="mt-4 text-center text-xs text-muted-foreground">
-            Click a button to test playback/logging. Double-click a button to assign a sound.
-          </p>
+          <p className="mt-4 text-center text-xs text-muted-foreground">Click a button to test playback/logging. Double-click a button to assign a sound.</p>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8">
             {buttons.map((btn) => (
               <div key={btn.id} className="text-center space-y-2">
-                <div
-                  className="w-4 h-4 rounded-full mx-auto"
-                  style={{ backgroundColor: btn.color }}
-                />
+                <div className="w-4 h-4 rounded-full mx-auto" style={{ backgroundColor: btn.color }} />
                 <p className="text-sm font-medium">Button {btn.id}</p>
-                <p className="text-xs text-muted-foreground truncate">
-                  {btn.soundFile || "No sound assigned"}
-                </p>
+                <p className="text-xs text-muted-foreground truncate">{btn.soundFile || "No sound assigned"}</p>
                 <Button variant="outline" size="sm" onClick={() => openConfig(btn)}>
                   Configure
                 </Button>
@@ -377,22 +391,14 @@ export default function Device() {
         <SheetContent className="overflow-y-auto max-h-screen">
           <SheetHeader>
             <SheetTitle>Configure Button {selectedButton?.id}</SheetTitle>
-            <SheetDescription>
-              Choose an existing sound or upload a new WAV/MP3 file.
-            </SheetDescription>
+            <SheetDescription>Choose an existing sound or upload a new WAV/MP3 file. Files must be maximum 2 minutes.</SheetDescription>
           </SheetHeader>
 
           <div className="space-y-6 mt-6 pb-8">
             <div className="space-y-2">
               <Label>Sound description / label</Label>
-              <Input
-                value={tempSongName}
-                onChange={(e) => setTempSongName(e.target.value)}
-                placeholder="Example: calm piano, short bell, bird chirping..."
-              />
-              <p className="text-xs text-muted-foreground">
-                This description will be saved in metadata and shown in the dashboard.
-              </p>
+              <Input value={tempSongName} onChange={(e) => setTempSongName(e.target.value)} placeholder="Example: calm piano, short bell, bird chirping..." />
+              <p className="text-xs text-muted-foreground">This description will be saved in metadata and shown in the dashboard.</p>
             </div>
 
             <div className="space-y-2">
@@ -401,7 +407,6 @@ export default function Device() {
                 <SelectTrigger>
                   <SelectValue placeholder="Select sound from device library" />
                 </SelectTrigger>
-
                 <SelectContent>
                   {sounds.map((sound) => (
                     <SelectItem key={sound.name} value={sound.name}>
@@ -414,14 +419,7 @@ export default function Device() {
 
             <div className="space-y-2">
               <Label>Or upload new audio</Label>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="audio/mp3,audio/wav,audio/mpeg"
-                className="hidden"
-                onChange={handleFileChange}
-              />
+              <input ref={fileInputRef} type="file" accept=".mp3,.wav,audio/mpeg,audio/wav" className="hidden" onChange={handleFileChange} />
 
               <div className="border-2 border-dashed border-border rounded-lg p-6 text-center">
                 {tempUploadFile ? (
@@ -432,20 +430,15 @@ export default function Device() {
                       type="button"
                       onClick={() => {
                         setTempUploadFile(null);
-                        setTempAudioUrl(
-                          tempSoundFile ? `/api/sounds/${encodeURIComponent(tempSoundFile)}` : null
-                        );
+                        setTempUploadDurationMs(null);
+                        setTempAudioUrl(tempSoundFile ? `/api/sounds/${encodeURIComponent(tempSoundFile)}` : null);
                       }}
                     >
                       <X className="h-3 w-3 text-muted-foreground" />
                     </button>
                   </div>
                 ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
+                  <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
                     <Upload className="h-4 w-4 mr-2" />
                     Upload MP3 or WAV
                   </Button>
@@ -456,35 +449,17 @@ export default function Device() {
             {tempAudioUrl && (
               <div className="space-y-2">
                 <Label>Preview</Label>
-
                 <div className="flex items-center gap-3 bg-muted rounded-lg p-3">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={togglePlay}
-                    className="shrink-0"
-                  >
+                  <Button variant="ghost" size="icon" onClick={togglePlay} className="shrink-0">
                     {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                   </Button>
-
-                  <audio
-                    ref={audioRef}
-                    src={tempAudioUrl}
-                    onEnded={() => setIsPlaying(false)}
-                  />
-
-                  <span className="text-sm text-muted-foreground truncate">
-                    {tempSongName || tempSoundFile || "Untitled"}
-                  </span>
+                  <audio ref={audioRef} src={tempAudioUrl} onEnded={() => setIsPlaying(false)} />
+                  <span className="text-sm text-muted-foreground truncate">{tempSongName || tempSoundFile || "Untitled"}</span>
                 </div>
               </div>
             )}
 
-            <Button
-              className="w-full"
-              onClick={handleSave}
-              disabled={!tempSoundFile && !tempUploadFile}
-            >
+            <Button className="w-full" onClick={handleSave} disabled={!tempSoundFile && !tempUploadFile}>
               <Save className="h-4 w-4 mr-2" />
               Save to device config
             </Button>

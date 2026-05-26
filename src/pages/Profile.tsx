@@ -1,43 +1,130 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Camera } from "lucide-react";
-
-// supbase
-import { useEffect} from "react";
 import { supabase } from "@/lib/supabase";
 
+const emptyProfile = {
+  ownerName: "",
+  email: "",
+  parrotName: "",
+  species: "",
+  age: "",
+  gender: "",
+  environment: "",
+};
 
 export default function Profile() {
   const { toast } = useToast();
-  const [profile, setProfile] = useState({
-    ownerName: "",
-    email: "",
 
-    parrotName: "",
-    species: "",
-    age: "",
-    gender: "",
-    environment: "",
-  });
+  const [profile, setProfile] = useState(emptyProfile);
+  const [agreementOpen, setAgreementOpen] = useState(false);
+  const [agreementAccepted, setAgreementAccepted] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const update = (key: string, value: string) => setProfile((p) => ({ ...p, [key]: value }));
+  const update = (key: string, value: string) => {
+    setProfile((previous) => ({ ...previous, [key]: value }));
+  };
 
+  const loadProfileByEmail = async (email: string) => {
+    const cleanEmail = email.trim();
+    if (!cleanEmail) return;
 
-  const handleSave = async () => {
-    const { error } = await supabase.from("profiles").insert({
-      owner_name: profile.ownerName,
-      email: profile.email,
-      parrot_name: profile.parrotName,
-      species: profile.species,
-      age: Number(profile.age),
-      gender: profile.gender,
-      environment: profile.environment,
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("email", cleanEmail)
+      .maybeSingle();
+
+    if (error) {
+      toast({
+        title: "Could not load profile",
+        description: error.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!data) return;
+
+    setProfile({
+      ownerName: data.owner_name || "",
+      email: data.email || cleanEmail,
+      parrotName: data.parrot_name || "",
+      species: data.species || "",
+      age: data.age !== null && data.age !== undefined ? String(data.age) : "",
+      gender: data.gender || "",
+      environment: data.environment || "",
     });
+
+    setAgreementAccepted(Boolean(data.agreement_accepted));
+    localStorage.setItem("parrot_owner_email", data.email || cleanEmail);
+  };
+
+  useEffect(() => {
+    const savedEmail = localStorage.getItem("parrot_owner_email");
+
+    if (savedEmail) {
+      setProfile((previous) => ({ ...previous, email: savedEmail }));
+      loadProfileByEmail(savedEmail);
+    }
+  }, []);
+
+  const saveProfile = async () => {
+    if (!profile.ownerName.trim() || !profile.email.trim() || !profile.parrotName.trim()) {
+      toast({
+        title: "Missing information",
+        description: "Please fill in at least owner name, email, and parrot name.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!agreementAccepted) {
+      setAgreementOpen(true);
+      return;
+    }
+
+    setSaving(true);
+
+    const { error } = await supabase.from("profiles").upsert(
+      {
+        owner_name: profile.ownerName.trim(),
+        email: profile.email.trim(),
+        parrot_name: profile.parrotName.trim(),
+        species: profile.species.trim(),
+        age: profile.age ? Number(profile.age) : null,
+        gender: profile.gender,
+        environment: profile.environment,
+        agreement_accepted: true,
+        agreement_accepted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "email" }
+    );
+
+    setSaving(false);
 
     if (error) {
       toast({
@@ -48,9 +135,11 @@ export default function Profile() {
       return;
     }
 
+    localStorage.setItem("parrot_owner_email", profile.email.trim());
+
     toast({
       title: "Profile saved",
-      description: "Your information has been saved to Supabase.",
+      description: "Your owner and parrot information has been saved.",
     });
   };
 
@@ -58,55 +147,96 @@ export default function Profile() {
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Parrot Owner Profile</h1>
-        <p className="text-muted-foreground mt-1">Manage your account and parrot details.</p>
+        <p className="text-muted-foreground mt-1">
+          Manage your account and parrot details.
+        </p>
       </div>
 
       <Card>
-        <CardHeader><CardTitle className="text-lg">Owner Information</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-lg">Owner Information</CardTitle>
+        </CardHeader>
+
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Name</Label>
-              <Input value={profile.ownerName} onChange={(e) => update("ownerName", e.target.value)} />
+              <Input
+                value={profile.ownerName}
+                onChange={(event) => update("ownerName", event.target.value)}
+              />
             </div>
+
             <div className="space-y-2">
               <Label>Email</Label>
-              <Input type="email" value={profile.email} onChange={(e) => update("email", e.target.value)} />
+              <Input
+                type="email"
+                value={profile.email}
+                onChange={(event) => update("email", event.target.value)}
+                onBlur={() => loadProfileByEmail(profile.email)}
+              />
+              <p className="text-xs text-muted-foreground">
+                If this email already exists, the existing profile will be updated.
+              </p>
             </div>
           </div>
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-lg">Parrot Information</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-lg">Parrot Information</CardTitle>
+        </CardHeader>
+
         <CardContent className="space-y-4">
           <div className="flex items-center gap-6 mb-2">
-            <div className="w-20 h-20 rounded-full bg-muted border-2 border-dashed border-border flex items-center justify-center cursor-pointer hover:bg-muted/80 transition-colors">
+            <div className="w-20 h-20 rounded-full bg-muted border-2 border-dashed border-border flex items-center justify-center">
               <Camera className="h-6 w-6 text-muted-foreground" />
             </div>
+
             <div>
               <p className="text-sm font-medium">Parrot Photo</p>
-              <p className="text-xs text-muted-foreground">Click to upload a photo</p>
+              <p className="text-xs text-muted-foreground">
+                Photo upload can be added later.
+              </p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Parrot Name</Label>
-              <Input value={profile.parrotName} onChange={(e) => update("parrotName", e.target.value)} />
+              <Input
+                value={profile.parrotName}
+                onChange={(event) => update("parrotName", event.target.value)}
+              />
             </div>
+
             <div className="space-y-2">
               <Label>Species</Label>
-              <Input value={profile.species} onChange={(e) => update("species", e.target.value)} />
+              <Input
+                value={profile.species}
+                onChange={(event) => update("species", event.target.value)}
+              />
             </div>
+
             <div className="space-y-2">
               <Label>Age (years)</Label>
-              <Input type="number" value={profile.age} onChange={(e) => update("age", e.target.value)} />
+              <Input
+                type="number"
+                value={profile.age}
+                onChange={(event) => update("age", event.target.value)}
+              />
             </div>
+
             <div className="space-y-2">
               <Label>Gender</Label>
-              <Select value={profile.gender} onValueChange={(v) => update("gender", v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select
+                value={profile.gender}
+                onValueChange={(value) => update("gender", value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select gender" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="Male">Male</SelectItem>
                   <SelectItem value="Female">Female</SelectItem>
@@ -118,8 +248,13 @@ export default function Profile() {
 
           <div className="space-y-2">
             <Label>Environment</Label>
-            <Select value={profile.environment} onValueChange={(v) => update("environment", v)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+            <Select
+              value={profile.environment}
+              onValueChange={(value) => update("environment", value)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select environment" />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="home">Home</SelectItem>
                 <SelectItem value="aviary">Aviary</SelectItem>
@@ -130,7 +265,64 @@ export default function Profile() {
         </CardContent>
       </Card>
 
-      <Button onClick={handleSave} className="w-full">Save Profile</Button>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">User Agreement</CardTitle>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Before registering, please open and read the user agreement.
+          </p>
+
+          <Button variant="outline" onClick={() => setAgreementOpen(true)}>
+            Read User Agreement
+          </Button>
+
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Checkbox
+              checked={agreementAccepted}
+              onCheckedChange={(checked) => setAgreementAccepted(Boolean(checked))}
+            />
+            <span>I have read and agree to the user agreement.</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Button onClick={saveProfile} className="w-full" disabled={saving}>
+        {saving ? "Saving..." : "Save Profile"}
+      </Button>
+
+      <AlertDialog open={agreementOpen} onOpenChange={setAgreementOpen}>
+        <AlertDialogContent className="max-w-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>User Agreement</AlertDialogTitle>
+
+            <AlertDialogDescription asChild>
+              <div className="max-h-[400px] overflow-y-auto space-y-3 text-left text-sm">
+                <p>
+                  This application is used as part of a research project studying
+                  parrot interaction with a sound-playing device........................
+                </p>
+
+                
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel>Close</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setAgreementAccepted(true);
+                setAgreementOpen(false);
+              }}
+            >
+              I Have Read and Agree
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

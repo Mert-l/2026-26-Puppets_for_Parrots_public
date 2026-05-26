@@ -26,7 +26,7 @@ function ensureFiles() {
   if (!fs.existsSync(LOG_PATH)) {
     fs.writeFileSync(
       LOG_PATH,
-      'timestamp,button,soundfile,ms_since_last_sound\n'
+      'timestamp,owner_email,button,soundfile,ms_since_last_sound\n'
     );
   }
 }
@@ -107,18 +107,46 @@ function listSounds() {
   });
 }
 
+function normalizeTimestamp(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return Date.now();
+
+  const asNumber = Number(raw);
+  if (!Number.isNaN(asNumber)) {
+    return asNumber < 1000000000000 ? asNumber * 1000 : asNumber;
+  }
+
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? Date.now() : parsed;
+}
+
 function readLogs() {
   if (!fs.existsSync(LOG_PATH)) return [];
 
   const content = fs.readFileSync(LOG_PATH, 'utf8').trim();
   if (!content) return [];
 
-  const lines = content.split(/\r?\n/).slice(1);
+  const lines = content.split(/\r?\n/);
+  const header = lines[0] || '';
+  const hasOwnerEmail = header.includes('owner_email');
 
-  return lines.filter(Boolean).map((line) => {
-    const [timestamp, button, soundfile] = line.split(',').map(v => v.trim());
+  return lines.slice(1).filter(Boolean).map((line) => {
+    const parts = line.split(',').map(v => v.trim());
+
+    if (hasOwnerEmail) {
+      const [timestamp, owner_email, button, soundfile] = parts;
+      return {
+        timestamp: normalizeTimestamp(timestamp),
+        owner_email,
+        button: Number(button),
+        soundfile,
+      };
+    }
+
+    const [timestamp, button, soundfile] = parts;
     return {
-      timestamp: Number(timestamp),
+      timestamp: normalizeTimestamp(timestamp),
+      owner_email: '',
       button: Number(button),
       soundfile,
     };
@@ -129,9 +157,13 @@ function appendLog({
   button,
   soundfile,
   timestamp,
+  owner_email,
   ms_since_last_sound,
 }) {
   const safeButton = Number(button);
+
+  const safeOwnerEmail = String(owner_email || '')
+    .replace(/[\r\n,]/g, '_');
 
   const safeSound = String(soundfile || '')
     .replace(/[\r\n,]/g, '_');
@@ -143,9 +175,17 @@ function appendLog({
 
   fs.appendFileSync(
     LOG_PATH,
-    `${safeTimestamp},${safeButton},${safeSound},${delta}\n`
+    `${safeTimestamp},${safeOwnerEmail},${safeButton},${safeSound},${delta}\n`
   );
-  
+}
+
+function isAllowedSoundName(fileName) {
+  return /\.(wav|mp3)$/i.test(fileName);
+}
+
+function isAllowedDuration(durationMs) {
+  if (durationMs === undefined || durationMs === null || durationMs === '') return true;
+  return Number(durationMs) <= 120000;
 }
 
 ensureFiles();
@@ -242,6 +282,14 @@ const server = http.createServer(async (req, res) => {
         return send(res, 400, { error: 'Missing name or data' });
       }
 
+      if (!isAllowedSoundName(fileName)) {
+        return send(res, 400, { error: 'Only MP3 and WAV files are allowed' });
+      }
+
+      if (!isAllowedDuration(body.duration_ms)) {
+        return send(res, 400, { error: 'Sound files must be maximum 2 minutes' });
+      }
+
       fs.writeFileSync(
         path.join(SOUNDS_DIR, fileName),
         Buffer.from(base64, 'base64')
@@ -254,7 +302,7 @@ const server = http.createServer(async (req, res) => {
       const newSound = {
         name: fileName,
         label: cleanLabel || fileName.replace(/\.[^.]+$/, ''),
-        duration_ms: 0,
+        duration_ms: Number(body.duration_ms || 0),
       };
 
       writeSoundIndex({
@@ -317,10 +365,13 @@ const server = http.createServer(async (req, res) => {
 
       console.log("  └─ BEFORE appendLog", Date.now());
 
+      const ownerEmail = String(body.owner_email || '');
+
       appendLog({
         button,
         soundfile,
         timestamp,
+        owner_email: ownerEmail,
         ms_since_last_sound: msSinceLastSound,
       });
 
@@ -331,6 +382,7 @@ const server = http.createServer(async (req, res) => {
         button,
         soundfile,
         timestamp,
+        owner_email: ownerEmail,
         ms_since_last_sound: msSinceLastSound,
       };
 

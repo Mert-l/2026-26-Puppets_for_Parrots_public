@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:api": "node server/device-api.cjs",
-    "dev:web": "vite"
+    "dev:web": "vite",
+    "start": "node server/device-api.cjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
