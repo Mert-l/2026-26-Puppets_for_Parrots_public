@@ -203,6 +203,14 @@ const server = http.createServer(async (req, res) => {
 
     const url = new URL(req.url, `http://${req.headers.host}`);
 
+    if (req.method === 'GET' && url.pathname === '/') {
+      return send(res, 200, {
+        ok: true,
+        name: 'parrot-device-api',
+        message: 'API is running. Use /api/health, /api/logs, /api/sounds, or /api/config.'
+      });
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/health') {
       return send(res, 200, { ok: true, name: 'parrot-device-api' });
     }
