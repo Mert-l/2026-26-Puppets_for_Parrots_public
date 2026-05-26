@@ -39,10 +39,16 @@ const emptyButtons: ButtonConfig[] = [1, 2, 3, 4].map((id) => ({
   audioUrl: null,
 }));
 
-const API_BASE = "";
+const API_BASE =
+  import.meta.env.VITE_API_URL || "http://localhost:3001";
+
 const MAX_AUDIO_SECONDS = 120;
 const allowedAudioTypes = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave"];
 const allowedAudioExtensions = [".mp3", ".wav"];
+
+function getSoundUrl(fileName: string) {
+  return `${API_BASE}/api/sounds/${encodeURIComponent(fileName)}`;
+}
 
 async function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -127,7 +133,7 @@ export default function Device() {
             label: String(id),
             songName: loadedSoundLabel.get(soundFile) || soundFile.replace(/\.[^.]+$/, ""),
             soundFile,
-            audioUrl: soundFile ? `/api/sounds/${encodeURIComponent(soundFile)}` : null,
+            audioUrl: soundFile ? getSoundUrl(soundFile) : null,
           };
         })
       );
@@ -166,7 +172,7 @@ export default function Device() {
     setTempUploadFile(null);
     setTempUploadDurationMs(null);
     setTempSongName(soundLabel.get(fileName) || fileName.replace(/\.[^.]+$/, ""));
-    setTempAudioUrl(`/api/sounds/${encodeURIComponent(fileName)}`);
+    setTempAudioUrl(getSoundUrl(fileName));
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -265,7 +271,7 @@ export default function Device() {
               ...b,
               songName: finalLabel,
               soundFile: finalSoundFile,
-              audioUrl: finalSoundFile ? `/api/sounds/${encodeURIComponent(finalSoundFile)}` : null,
+              audioUrl: finalSoundFile ? getSoundUrl(finalSoundFile) : null,
             }
           : b
       );
@@ -431,7 +437,7 @@ export default function Device() {
                       onClick={() => {
                         setTempUploadFile(null);
                         setTempUploadDurationMs(null);
-                        setTempAudioUrl(tempSoundFile ? `/api/sounds/${encodeURIComponent(tempSoundFile)}` : null);
+                        setTempAudioUrl(tempSoundFile ? getSoundUrl(tempSoundFile) : null);
                       }}
                     >
                       <X className="h-3 w-3 text-muted-foreground" />
